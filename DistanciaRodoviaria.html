@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROCE+ | Distância rodoviária real por API</title>
+<style>
+  :root{--or:#E8501E;--or2:#FCE9E2;--gr:#4D4D4F;--gr2:#F2F2F2;--gr3:#D9D9D9;--ok:#2E7D32;--warn:#B26A00;--err:#C62828}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;background:#fafafa}
+  header{background:var(--gr);color:#fff;padding:14px 24px;border-bottom:4px solid var(--or)}
+  header h1{margin:0;font-size:20px} header p{margin:4px 0 0;font-size:12px;opacity:.85}
+  main{max-width:1180px;margin:0 auto;padding:18px 24px 40px}
+  .card{background:#fff;border:1px solid var(--gr3);border-radius:6px;margin-bottom:16px}
+  .card h2{margin:0;padding:10px 16px;font-size:15px;background:var(--gr2);border-bottom:1px solid var(--gr3);border-radius:6px 6px 0 0}
+  .card h2 span{display:inline-block;background:var(--or);color:#fff;border-radius:50%;width:22px;height:22px;text-align:center;line-height:22px;margin-right:8px;font-size:12px}
+  .body{padding:14px 16px}
+  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:10px}
+  label{display:flex;flex-direction:column;font-size:12px;color:#555;gap:4px}
+  label.inline{flex-direction:row;align-items:center;gap:6px;color:#222;font-size:13px}
+  input,select{font:inherit;padding:6px 8px;border:1px solid #bbb;border-radius:4px;min-width:120px}
+  input[type=number]{width:110px;min-width:0} input[type=checkbox]{min-width:0}
+  button{font:inherit;padding:8px 14px;border-radius:4px;border:1px solid var(--or);background:var(--or);color:#fff;cursor:pointer;font-weight:bold}
+  button.sec{background:#fff;color:var(--or)} button:disabled{opacity:.45;cursor:not-allowed}
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .kpi{border:1px solid var(--gr3);border-radius:6px;padding:10px 12px;background:#fff}
+  .kpi b{display:block;font-size:22px;color:var(--gr)} .kpi small{color:#666}
+  .kpi.hl b{color:var(--or)}
+  .note{font-size:12px;color:#555;background:var(--or2);border-left:4px solid var(--or);padding:8px 10px;border-radius:4px;margin:8px 0}
+  .bar{height:16px;background:var(--gr2);border-radius:8px;overflow:hidden;border:1px solid var(--gr3)}
+  .bar>div{height:100%;width:0;background:var(--or);transition:width .3s}
+  #log{height:170px;overflow:auto;background:#1e1e1e;color:#ddd;font:12px Consolas,monospace;padding:8px;border-radius:4px;white-space:pre-wrap}
+  #log .e{color:#ff8a80} #log .w{color:#ffd180} #log .o{color:#b9f6ca}
+  table{border-collapse:collapse;width:100%;font-size:12px}
+  th,td{border-bottom:1px solid var(--gr3);padding:5px 6px;text-align:left} th{background:var(--gr2)}
+  td.n{text-align:right}
+  .hide{display:none!important}
+  .tag{display:inline-block;padding:1px 6px;border-radius:10px;font-size:11px;background:var(--gr2)}
+  footer{font-size:11px;color:#777;text-align:center;padding:10px}
+  @media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+<script>
+/* Carrega SheetJS (leitura/gravação de Excel) com CDNs alternativos */
+(function(){
+  var urls=["https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js",
+            "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+            "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"];
+  var i=0;
+  function next(){
+    if(i>=urls.length){window.XLSX_FAILED=true;document.dispatchEvent(new Event("xlsx-ready"));return;}
+    var s=document.createElement("script");s.src=urls[i++];
+    s.onload=function(){document.dispatchEvent(new Event("xlsx-ready"));};
+    s.onerror=next;document.head.appendChild(s);
+  }
+  next();
+})();
+</script>
+</head>
+<body>
+<header>
+  <h1>ROCE+ · Distância rodoviária real entre pontos (lat/long)</h1>
+  <p>Lê a Matriz OD (Excel ou CSV), calcula a distância rodoviária por API de roteamento e devolve a base preenchida.</p>
+</header>
+<main>
+
+<!-- 1. ARQUIVO -->
+<div class="card"><h2><span>1</span>Base de dados</h2><div class="body">
+  <div class="row">
+    <label>Arquivo (.xlsx ou .csv)<input type="file" id="file" accept=".xlsx,.xlsm,.xls,.csv"></label>
+    <label>Aba<select id="sheet" disabled></select></label>
+    <span id="libStatus" class="tag">Carregando leitor de Excel…</span>
+  </div>
+  <div id="mapBox" class="hide">
+    <div class="row" id="mapRow"></div>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="onlyModal" checked> Calcular apenas linhas com Modal =</label>
+      <input id="modalValue" value="Rodo" style="min-width:80px;width:90px">
+    </div>
+  </div>
+</div></div>
+
+<!-- 2. FONTE -->
+<div class="card"><h2><span>2</span>Fonte de distância (API)</h2><div class="body">
+  <div class="row">
+    <label>Serviço<select id="prov">
+      <option value="ors">openrouteservice – perfil caminhão (chave gratuita)</option>
+      <option value="azure">Azure Maps Route Matrix (chave Azure)</option>
+      <option value="osrm">OSRM – servidor público de demonstração (sem chave)</option>
+      <option value="osrmself">OSRM – servidor próprio/interno (URL)</option>
+      <option value="offline">Teste offline – linha reta × fator (sem API)</option>
+    </select></label>
+    <label id="keyL">Chave da API<input id="key" type="password" placeholder="cole a chave aqui" style="min-width:300px"></label>
+    <label id="orsProfL">Perfil<select id="orsProf"><option value="driving-hgv">Caminhão (driving-hgv)</option><option value="driving-car">Carro (driving-car)</option></select></label>
+    <label id="azModeL" class="hide">Modo<select id="azMode"><option value="truck">Caminhão (truck)</option><option value="driving">Carro (driving)</option></select></label>
+    <label id="urlL" class="hide">URL do servidor OSRM<input id="osrmUrl" value="https://router.project-osrm.org" style="min-width:300px"></label>
+    <label id="facL" class="hide">Fator<input id="fac" type="number" step="0.01" value="1.25"></label>
+  </div>
+  <div id="provNote" class="note"></div>
+  <details><summary style="cursor:pointer;font-size:12px;color:#555">Limites por requisição e ritmo (avançado)</summary>
+    <div class="row" style="margin-top:8px">
+      <label>Máx. células (orig×dest)<input id="lCells" type="number"></label>
+      <label>Máx. coordenadas (orig+dest)<input id="lCoords" type="number"></label>
+      <label>Máx. origens<input id="lO" type="number"></label>
+      <label>Máx. destinos<input id="lD" type="number"></label>
+      <label>Pausa entre requisições (ms)<input id="delay" type="number"></label>
+      <label class="inline"><input type="checkbox" id="useCache" checked> Reaproveitar resultados já calculados (cache do navegador)</label>
+    </div>
+  </details>
+</div></div>
+
+<!-- 3. PLANO E EXECUÇÃO -->
+<div class="card"><h2><span>3</span>Plano e execução</h2><div class="body">
+  <div class="row">
+    <button id="btnPlan" disabled>Analisar base</button>
+    <button id="btnTest" class="sec" disabled>Testar 1 requisição</button>
+    <button id="btnRun" disabled>Calcular tudo</button>
+    <button id="btnStop" class="sec" disabled>Pausar</button>
+    <button id="btnClear" class="sec">Limpar cache</button>
+  </div>
+  <div class="grid" id="kpis">
+    <div class="kpi"><small>Linhas na base</small><b id="kRows">–</b></div>
+    <div class="kpi"><small>Linhas a calcular (modal)</small><b id="kCons">–</b></div>
+    <div class="kpi"><small>Pares únicos de coordenadas</small><b id="kPairs">–</b></div>
+    <div class="kpi"><small>Já no cache</small><b id="kCache">–</b></div>
+    <div class="kpi hl"><small>Pares a consultar</small><b id="kTodo">–</b></div>
+    <div class="kpi hl"><small>Requisições previstas</small><b id="kReq">–</b></div>
+    <div class="kpi"><small>Tempo estimado</small><b id="kEta">–</b></div>
+    <div class="kpi"><small>Sem coordenada / mesmo ponto</small><b id="kSkip">–</b></div>
+  </div>
+  <div style="margin:12px 0 6px" class="row"><div style="flex:1"><div class="bar"><div id="bar"></div></div></div><span id="prog" style="min-width:220px;font-size:12px">–</span></div>
+  <div id="log"></div>
+</div></div>
+
+<!-- 4. RESULTADOS -->
+<div class="card"><h2><span>4</span>Resultados e exportação</h2><div class="body">
+  <div class="grid">
+    <div class="kpi"><small>Pares com rota (OK)</small><b id="rOk">–</b></div>
+    <div class="kpi"><small>Sem rota encontrada</small><b id="rNo">–</b></div>
+    <div class="kpi"><small>Erro de API</small><b id="rErr">–</b></div>
+    <div class="kpi hl"><small>Fator real (mediana rodovia ÷ linha reta)</small><b id="rFac">–</b></div>
+  </div>
+  <p style="font-size:12px;color:#555" id="rFacTxt"></p>
+  <div class="row">
+    <button id="btnXlsx" disabled>Baixar Excel com distâncias</button>
+    <button id="btnCsv" class="sec" disabled>Baixar CSV (Chave-Lane-OD + distância)</button>
+  </div>
+  <h3 style="font-size:14px;margin:16px 0 6px">Pontos para conferir <span class="tag" id="suspN">0</span></h3>
+  <p style="font-size:12px;color:#555;margin:0 0 6px">Ponto longe da rodovia (&gt; 2 km), rodovia mais de 3× a linha reta ou menor que ela. Normalmente indica coordenada errada.</p>
+  <div style="max-height:320px;overflow:auto"><table id="susp"><thead><tr><th>Exemplo de arco</th><th>Linha reta (km)</th><th>Rodovia (km)</th><th>Fator</th><th>Distância até a rodovia (m)</th><th>Motivo</th></tr></thead><tbody></tbody></table></div>
+</div></div>
+
+<footer>Rotas: openrouteservice / OSRM © colaboradores do OpenStreetMap (ODbL) · Azure Maps © Microsoft · Linha reta pela fórmula de Haversine (R = 6.371 km)</footer>
+</main>
+
+<script id="core">
+/* ======== NÚCLEO (sem DOM) ======== */
+var CORE=(function(){
+  var toRad=function(x){return x*Math.PI/180;};
+  function hav(lat1,lon1,lat2,lon2){
+    var dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);
+    var a=Math.pow(Math.sin(dLat/2),2)+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.pow(Math.sin(dLon/2),2);
+    return 2*6371*Math.asin(Math.min(1,Math.sqrt(a)));
+  }
+  function norm(s){return String(s==null?"":s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");}
+  function num(v){
+    if(v==null||v==="")return NaN;
+    if(typeof v==="number")return v;
+    var n=parseFloat(String(v).trim().replace(/\s/g,"").replace(",","."));
+    return isFinite(n)?n:NaN;
+  }
+  var FIELDS=[
+    ["key","Chave-Lane-OD (opcional)",["chavelaneod","chaveod","chave"]],
+    ["orig","Origem",["origem","codigoorigem"]],
+    ["dest","Destino",["destino","codigodestino"]],
+    ["modal","Modal",["modal"]],
+    ["olat","Lat Origem",["latorigem","latitudeorigem"]],
+    ["olon","Lon Origem",["lonorigem","longorigem","longitudeorigem"]],
+    ["dlat","Lat Destino",["latdestino","latitudedestino"]],
+    ["dlon","Lon Destino",["londestino","longdestino","longitudedestino"]]
+  ];
+  function findHeader(aoa){
+    for(var r=0;r<Math.min(20,aoa.length);r++){
+      var h=(aoa[r]||[]).map(norm);
+      if(h.indexOf("origem")>=0&&h.indexOf("destino")>=0)return r;
+    }
+    return 0;
+  }
+  function autoMap(header){
+    var h=header.map(norm),m={};
+    FIELDS.forEach(function(f){m[f[0]]=-1;for(var i=0;i<f[2].length;i++){var x=h.indexOf(f[2][i]);if(x>=0){m[f[0]]=x;break;}}});
+    return m;
+  }
+  function validCoord(lat,lon){return isFinite(lat)&&isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180&&!(lat===0&&lon===0);}
+  function ck(lat,lon){return lat.toFixed(5)+","+lon.toFixed(5);}
+  function buildPairs(aoa,hr,m,opt){
+    var pairs=new Map(),rowPair=new Array(aoa.length).fill(null);
+    var st={rows:0,considered:0,noCoord:0,same:0,otherModal:0},mv=norm(opt.modalValue);
+    for(var r=hr+1;r<aoa.length;r++){
+      var row=aoa[r];
+      if(!row||row.every(function(v){return v==null||v==="";}))continue;
+      st.rows++;
+      if(opt.onlyModal&&m.modal>=0&&norm(row[m.modal])!==mv){st.otherModal++;continue;}
+      st.considered++;
+      var a=num(row[m.olat]),b=num(row[m.olon]),c=num(row[m.dlat]),d=num(row[m.dlon]);
+      if(!validCoord(a,b)||!validCoord(c,d)){rowPair[r]="#SEM_COORD";st.noCoord++;continue;}
+      var ok=ck(a,b),dk=ck(c,d);
+      if(ok===dk){rowPair[r]="#MESMO_PONTO";st.same++;continue;}
+      var pk=ok+"|"+dk;rowPair[r]=pk;
+      if(!pairs.has(pk))pairs.set(pk,{pk:pk,ok:ok,dk:dk,o:[a,b],d:[c,d],hav:hav(a,b,c,d)});
+    }
+    return {pairs:pairs,rowPair:rowPair,st:st};
+  }
+  /* Melhor formato de bloco (a origens × b destinos) dentro dos limites */
+  function bestShape(nO,nD,L){
+    var best=null;
+    for(var a=1;a<=Math.min(nO,L.maxO);a++){
+      var b=Math.min(nD,L.maxD,Math.floor(L.maxCells/a),L.maxCoords-a);
+      if(b<1)break;
+      var req=Math.ceil(nO/a)*Math.ceil(nD/b);
+      if(!best||req<best.req||(req===best.req&&a*b>best.a*best.b))best={a:a,b:b,req:req};
+    }
+    return best;
+  }
+  /* Agrupa origens com o mesmo conjunto de destinos e quebra em lotes */
+  function planBatches(todo,L){
+    var byO=new Map();
+    todo.forEach(function(p){
+      if(!byO.has(p.ok))byO.set(p.ok,{c:p.o,d:new Map()});
+      byO.get(p.ok).d.set(p.dk,p.d);
+    });
+    var groups=new Map();
+    byO.forEach(function(v,ok){
+      var keys=Array.from(v.d.keys()).sort(),sig=keys.join(";");
+      if(!groups.has(sig))groups.set(sig,{origins:[],dests:keys.map(function(k){return {k:k,c:v.d.get(k)};})});
+      groups.get(sig).origins.push({k:ok,c:v.c});
+    });
+    var batches=[];
+    groups.forEach(function(g){
+      var s=bestShape(g.origins.length,g.dests.length,L);
+      if(!s)throw new Error("Limites inválidos para montar as requisições.");
+      for(var i=0;i<g.origins.length;i+=s.a)
+        for(var j=0;j<g.dests.length;j+=s.b)
+          batches.push({origins:g.origins.slice(i,i+s.a),dests:g.dests.slice(j,j+s.b)});
+    });
+    return batches;
+  }
+  function splitBatch(b){
+    var h;
+    if(b.dests.length>1){h=Math.ceil(b.dests.length/2);return [{origins:b.origins,dests:b.dests.slice(0,h)},{origins:b.origins,dests:b.dests.slice(h)}];}
+    if(b.origins.length>1){h=Math.ceil(b.origins.length/2);return [{origins:b.origins.slice(0,h),dests:b.dests},{origins:b.origins.slice(h),dests:b.dests}];}
+    return null;
+  }
+  function apiErr(msg,size){var e=new Error(msg);e.size=!!size;return e;}
+  var LL=function(x){return [x.c[1],x.c[0]];}; /* [lon,lat] */
+
+  var PROV={
+    ors:{limits:{maxCells:3500,maxCoords:3500,maxO:3500,maxD:3500},delay:1600,
+      req:function(b,cfg){
+        var nO=b.origins.length;
+        return {url:"https://api.openrouteservice.org/v2/matrix/"+cfg.orsProf,
+          init:{method:"POST",headers:{"Authorization":cfg.key,"Content-Type":"application/json","Accept":"application/json"},
+            body:JSON.stringify({locations:b.origins.map(LL).concat(b.dests.map(LL)),
+              sources:b.origins.map(function(_,i){return i;}),destinations:b.dests.map(function(_,k){return nO+k;}),
+              metrics:["distance","duration"],units:"km"})}};
+      },
+      parse:function(b,j){
+        if(j&&j.error){var m=(j.error.message||JSON.stringify(j.error));throw apiErr("ORS: "+m,j.error.code===6004||/exceed|limit/i.test(m));}
+        var out=[];
+        for(var i=0;i<b.origins.length;i++)for(var k=0;k<b.dests.length;k++){
+          var km=j.distances&&j.distances[i]?j.distances[i][k]:null,s=j.durations&&j.durations[i]?j.durations[i][k]:null;
+          var so=(j.sources&&j.sources[i]&&j.sources[i].snapped_distance)||0,sd=(j.destinations&&j.destinations[k]&&j.destinations[k].snapped_distance)||0;
+          out.push({i:i,k:k,km:km==null?null:km,h:s==null?null:s/3600,snap:Math.max(so,sd)});
+        }
+        return out;
+      }},
+    azure:{limits:{maxCells:2500,maxCoords:2000,maxO:1000,maxD:1000},delay:400,
+      req:function(b,cfg){
+        return {url:"https://atlas.microsoft.com/route/matrix?api-version=2025-01-01",
+          init:{method:"POST",headers:{"subscription-key":cfg.key,"Content-Type":"application/json"},
+            body:JSON.stringify({type:"FeatureCollection",features:[
+              {type:"Feature",geometry:{type:"MultiPoint",coordinates:b.origins.map(LL)},properties:{pointType:"origins"}},
+              {type:"Feature",geometry:{type:"MultiPoint",coordinates:b.dests.map(LL)},properties:{pointType:"destinations"}}],
+              travelMode:cfg.azMode})}};
+      },
+      parse:function(b,j){
+        if(j&&j.error){var m=j.error.message||JSON.stringify(j.error);throw apiErr("Azure: "+m,/size|exceed|limit/i.test(m));}
+        var cells=(j&&j.properties&&j.properties.matrix)||(j&&j.matrix)||[];
+        if(!Array.isArray(cells))throw apiErr("Azure: resposta sem matriz – "+JSON.stringify(j).slice(0,300));
+        var out=[];
+        cells.forEach(function(c){
+          var ok=(c.statusCode==null||c.statusCode===200);
+          var m=c.distanceInMeters!=null?c.distanceInMeters:(c.lengthInMeters!=null?c.lengthInMeters:null);
+          var s=c.durationInSeconds!=null?c.durationInSeconds:(c.travelTimeInSeconds!=null?c.travelTimeInSeconds:null);
+          out.push({i:c.originIndex,k:c.destinationIndex,km:ok&&m!=null?m/1000:null,h:ok&&s!=null?s/3600:null,snap:0});
+        });
+        return out;
+      }},
+    osrm:{limits:{maxCells:1e9,maxCoords:100,maxO:100,maxD:100},delay:1100,
+      req:function(b,cfg){
+        var all=b.origins.concat(b.dests),nO=b.origins.length;
+        var coords=all.map(function(x){return x.c[1].toFixed(6)+","+x.c[0].toFixed(6);}).join(";");
+        var src=b.origins.map(function(_,i){return i;}).join(";"),dst=b.dests.map(function(_,k){return nO+k;}).join(";");
+        return {url:cfg.osrmUrl.replace(/\/+$/,"")+"/table/v1/driving/"+coords+"?sources="+src+"&destinations="+dst+"&annotations=distance,duration",init:{method:"GET"}};
+      },
+      parse:function(b,j){
+        if(!j||j.code!=="Ok"){var c=j&&j.code;throw apiErr("OSRM: "+(c||"")+" "+((j&&j.message)||""),c==="TooBig");}
+        var out=[];
+        for(var i=0;i<b.origins.length;i++)for(var k=0;k<b.dests.length;k++){
+          var m=j.distances?j.distances[i][k]:null,s=j.durations?j.durations[i][k]:null;
+          var so=(j.sources&&j.sources[i]&&j.sources[i].distance)||0,sd=(j.destinations&&j.destinations[k]&&j.destinations[k].distance)||0;
+          out.push({i:i,k:k,km:m==null?null:m/1000,h:s==null?null:s/3600,snap:Math.max(so,sd)});
+        }
+        return out;
+      }},
+    offline:{limits:{maxCells:5000,maxCoords:5000,maxO:5000,maxD:5000},delay:0,
+      parse:function(b,_,cfg){
+        var out=[];
+        for(var i=0;i<b.origins.length;i++)for(var k=0;k<b.dests.length;k++){
+          var o=b.origins[i].c,d=b.dests[k].c,km=hav(o[0],o[1],d[0],d[1])*cfg.fac;
+          out.push({i:i,k:k,km:km,h:km/60,snap:0});
+        }
+        return out;
+      }}
+  };
+  PROV.osrmself=PROV.osrm;
+
+  function flag(p,r){
+    if(!r||r.st!=="OK")return null;
+    var f=p.hav>0?r.km/p.hav:null;
+    if(r.snap>2000)return "Ponto a "+Math.round(r.snap/1000)+" km da rodovia";
+    if(p.hav>=5&&f!=null&&f>3)return "Rodovia > 3× a linha reta";
+    if(p.hav>=5&&f!=null&&f<0.95)return "Rodovia menor que a linha reta";
+    return null;
+  }
+  function quant(a,q){if(!a.length)return null;var s=a.slice().sort(function(x,y){return x-y;}),i=(s.length-1)*q,lo=Math.floor(i),hi=Math.ceil(i);return s[lo]+(s[hi]-s[lo])*(i-lo);}
+
+  return {hav:hav,norm:norm,num:num,FIELDS:FIELDS,findHeader:findHeader,autoMap:autoMap,buildPairs:buildPairs,
+          bestShape:bestShape,planBatches:planBatches,splitBatch:splitBatch,PROV:PROV,flag:flag,quant:quant,apiErr:apiErr};
+})();
+if(typeof module!=="undefined")module.exports=CORE;
+</script>
+
+<script>
+/* ======== INTERFACE ======== */
+(function(){
+var $=function(id){return document.getElementById(id);};
+var S={wb:null,isCsv:false,aoa:null,sheet:null,hr:0,map:null,off:{r:0,c:0},built:null,results:new Map(),todo:[],batches:[],running:false,stop:false,times:[]};
+var NEWCOLS=["Dist. rodoviária API (km)","Tempo API (h)","Fator rodovia/linha reta","Distância até rodovia (m)","Status distância","Fonte distância"];
+
+function log(msg,cls){var d=document.createElement("div");if(cls)d.className=cls;d.textContent="["+new Date().toLocaleTimeString()+"] "+msg;$("log").appendChild(d);$("log").scrollTop=1e9;}
+function fmt(n,d){return n==null||!isFinite(n)?"–":n.toLocaleString("pt-BR",{maximumFractionDigits:d==null?0:d,minimumFractionDigits:d==null?0:d});}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+function dur(s){if(!isFinite(s))return "–";if(s<90)return Math.round(s)+" s";if(s<5400)return Math.round(s/60)+" min";return (s/3600).toFixed(1).replace(".",",")+" h";}
+
+/* ---------- IndexedDB (cache) ---------- */
+var DB={db:null,
+  open:function(){var self=this;return new Promise(function(res){try{var r=indexedDB.open("roce_dist_cache",1);
+    r.onupgradeneeded=function(){r.result.createObjectStore("d");};
+    r.onsuccess=function(){self.db=r.result;res();};r.onerror=function(){log("Cache do navegador indisponível – resultados não serão guardados entre sessões.","w");res();};}catch(e){res();}});},
+  loadPrefix:function(prefix){var self=this;return new Promise(function(res){var out=new Map();if(!self.db)return res(out);
+    var tx=self.db.transaction("d","readonly"),st=tx.objectStore("d"),rq=st.openCursor(IDBKeyRange.bound(prefix,prefix+"\uffff"));
+    rq.onsuccess=function(){var c=rq.result;if(c){out.set(c.key.slice(prefix.length),c.value);c.continue();}else res(out);};rq.onerror=function(){res(out);};});},
+  putMany:function(prefix,entries){var self=this;return new Promise(function(res){if(!self.db)return res();
+    var tx=self.db.transaction("d","readwrite"),st=tx.objectStore("d");entries.forEach(function(e){st.put(e[1],prefix+e[0]);});
+    tx.oncomplete=function(){res();};tx.onerror=function(){res();};});},
+  clear:function(){var self=this;return new Promise(function(res){if(!self.db)return res();var tx=self.db.transaction("d","readwrite");tx.objectStore("d").clear();tx.oncomplete=function(){res();};});}
+};
+
+/* ---------- Fonte ---------- */
+var NOTES={
+  ors:"Recomendado. Base OpenStreetMap com perfil de <b>caminhão</b>. Crie uma chave gratuita em <b>account.heigit.org</b> (plano Standard). Limite de 3.500 pares por requisição; o plano gratuito tem cota diária de requisições de matriz. Confira a cota da sua conta antes de rodar tudo.",
+  azure:"Opção corporativa (Microsoft). Exige uma conta Azure Maps e a chave de assinatura (Portal Azure → recurso Azure Maps → Autenticação). Até 2.500 pares por requisição. Serviço pago por uso: confirme com TI/centro de custo. Usa a versão 2025-01-01 da API.",
+  osrm:"Sem chave, perfil <b>carro</b>. Servidor público de <b>demonstração</b>: sem garantia, uso intenso pode ser bloqueado e as coordenadas dos clientes saem para um servidor externo. Bom para testes e volumes pequenos; para a base inteira prefira openrouteservice, Azure ou um servidor interno.",
+  osrmself:"Use se TI tiver (ou puder subir) um servidor OSRM interno com o mapa do Brasil. Sem limites de cota e os dados não saem da empresa. Informe a URL base (ex.: http://servidor:5000).",
+  offline:"Não chama API. Calcula linha reta × fator, só para testar o fluxo e a exportação."
+};
+function provId(){return $("prov").value;}
+function cfg(){return {key:$("key").value.trim(),orsProf:$("orsProf").value,azMode:$("azMode").value,osrmUrl:$("osrmUrl").value.trim(),fac:parseFloat($("fac").value)||1.25};}
+function cachePrefix(){var p=provId(),c=cfg();
+  if(p==="ors")return "ors:"+c.orsProf+":";if(p==="azure")return "az:"+c.azMode+":";if(p==="osrm")return "osrmdemo:";if(p==="osrmself")return "osrm:"+c.osrmUrl+":";return "off:"+c.fac+":";}
+function srcLabel(){var p=provId(),c=cfg();
+  return {ors:"openrouteservice "+c.orsProf,azure:"Azure Maps "+c.azMode,osrm:"OSRM demo (carro)",osrmself:"OSRM "+c.osrmUrl,offline:"Linha reta × "+c.fac}[p];}
+function onProv(){
+  var p=provId(),P=CORE.PROV[p];
+  $("keyL").classList.toggle("hide",!(p==="ors"||p==="azure"));
+  $("orsProfL").classList.toggle("hide",p!=="ors");$("azModeL").classList.toggle("hide",p!=="azure");
+  $("urlL").classList.toggle("hide",!(p==="osrm"||p==="osrmself"));$("facL").classList.toggle("hide",p!=="offline");
+  if(p==="osrm")$("osrmUrl").value="https://router.project-osrm.org";
+  if(p==="osrmself"&&/project-osrm/.test($("osrmUrl").value))$("osrmUrl").value="http://localhost:5000";
+  $("osrmUrl").disabled=(p==="osrm");
+  $("lCells").value=Math.min(P.limits.maxCells,99999999);$("lCoords").value=P.limits.maxCoords;$("lO").value=P.limits.maxO;$("lD").value=P.limits.maxD;$("delay").value=P.delay;
+  $("provNote").innerHTML=NOTES[p];
+  resetPlan();
+}
+function limits(){return {maxCells:+$("lCells").value||1,maxCoords:+$("lCoords").value||2,maxO:+$("lO").value||1,maxD:+$("lD").value||1};}
+
+/* ---------- Leitura ---------- */
+function parseCSV(text){
+  var first=text.split(/\r?\n/)[0],sep=(first.split(";").length>=first.split(",").length)?";":",";
+  var rows=[],row=[],f="",q=false;
+  for(var i=0;i<text.length;i++){var ch=text[i];
+    if(q){if(ch==='"'){if(text[i+1]==='"'){f+='"';i++;}else q=false;}else f+=ch;}
+    else if(ch==='"')q=true;else if(ch===sep){row.push(f);f="";}
+    else if(ch==="\n"||ch==="\r"){if(ch==="\r"&&text[i+1]==="\n")i++;row.push(f);rows.push(row);row=[];f="";}
+    else f+=ch;}
+  if(f!==""||row.length){row.push(f);rows.push(row);}
+  return rows;
+}
+$("file").addEventListener("change",function(e){
+  var f=e.target.files[0];if(!f)return;
+  S.isCsv=/\.csv$/i.test(f.name);S.fileName=f.name.replace(/\.[^.]+$/,"");
+  log("Lendo "+f.name+" ("+fmt(f.size/1048576,1)+" MB)…");
+  var rd=new FileReader();
+  rd.onload=function(){
+    try{
+      if(S.isCsv){
+        var txt=new TextDecoder("utf-8").decode(new Uint8Array(rd.result));
+        S.wb=null;S.aoa=parseCSV(txt.replace(/^\uFEFF/,""));S.off={r:0,c:0};
+        $("sheet").innerHTML="<option>CSV</option>";$("sheet").disabled=true;afterSheet();
+      }else{
+        if(!window.XLSX){log("Leitor de Excel não carregou (rede bloqueou o CDN). Salve a aba Matriz_OD como CSV e carregue o CSV.","e");return;}
+        S.wb=XLSX.read(new Uint8Array(rd.result),{type:"array",cellFormula:true,cellStyles:true});
+        var names=S.wb.SheetNames;$("sheet").innerHTML=names.map(function(n){return "<option>"+n+"</option>";}).join("");
+        var pref=names.filter(function(n){return /matriz.?od/i.test(n);})[0]||names[0];$("sheet").value=pref;$("sheet").disabled=false;loadSheet();
+      }
+    }catch(err){log("Erro ao ler arquivo: "+err.message,"e");}
+  };
+  rd.readAsArrayBuffer(f);
+});
+$("sheet").addEventListener("change",loadSheet);
+function loadSheet(){
+  var ws=S.wb.Sheets[$("sheet").value];if(!ws||!ws["!ref"]){log("Aba vazia.","w");return;}
+  var rg=XLSX.utils.decode_range(ws["!ref"]);S.off={r:rg.s.r,c:rg.s.c};
+  S.aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null,blankrows:true});afterSheet();
+}
+function afterSheet(){
+  S.hr=CORE.findHeader(S.aoa);var header=(S.aoa[S.hr]||[]).map(function(x){return x==null?"":String(x);});
+  var m=CORE.autoMap(header);
+  var opts=function(sel){return "<option value='-1'>(não usar)</option>"+header.map(function(h,i){return "<option value='"+i+"'"+(i===sel?" selected":"")+">"+(h||"Coluna "+(i+1))+"</option>";}).join("");};
+  $("mapRow").innerHTML=CORE.FIELDS.map(function(f){return "<label>"+f[1]+"<select data-f='"+f[0]+"'>"+opts(m[f[0]])+"</select></label>";}).join("");
+  $("mapBox").classList.remove("hide");
+  var miss=CORE.FIELDS.filter(function(f){return f[0]!=="key"&&m[f[0]]<0;}).map(function(f){return f[1];});
+  log("Base carregada: "+fmt(S.aoa.length-S.hr-1)+" linhas. Cabeçalho na linha "+(S.hr+S.off.r+1)+"."+(miss.length?" Confira as colunas: "+miss.join(", "):" Colunas reconhecidas automaticamente."),miss.length?"w":"o");
+  $("mapRow").querySelectorAll("select").forEach(function(s){s.addEventListener("change",resetPlan);});
+  $("btnPlan").disabled=false;resetPlan();
+}
+function readMap(){var m={};$("mapRow").querySelectorAll("select").forEach(function(s){m[s.dataset.f]=+s.value;});return m;}
+
+/* ---------- Plano ---------- */
+function resetPlan(){S.built=null;S.batches=[];["btnTest","btnRun","btnXlsx","btnCsv"].forEach(function(b){$(b).disabled=true;});}
+["onlyModal","modalValue","orsProf","azMode","osrmUrl","fac","lCells","lCoords","lO","lD","useCache"].forEach(function(id){$(id).addEventListener("change",resetPlan);});
+$("prov").addEventListener("change",onProv);
+
+$("btnPlan").addEventListener("click",async function(){
+  if(!S.aoa)return;var m=readMap();S.map=m;
+  if(["orig","dest","olat","olon","dlat","dlon"].some(function(f){return m[f]<0;})){log("Defina as colunas de Origem, Destino e coordenadas.","e");return;}
+  S.built=CORE.buildPairs(S.aoa,S.hr,m,{onlyModal:$("onlyModal").checked,modalValue:$("modalValue").value});
+  var st=S.built.st;
+  S.results=$("useCache").checked?await DB.loadPrefix(cachePrefix()):new Map();
+  S.todo=[];S.built.pairs.forEach(function(p,pk){var r=S.results.get(pk);if(!r||r.st==="ERRO")S.todo.push(p);});
+  try{S.batches=CORE.planBatches(S.todo,limits());}catch(e){log(e.message,"e");return;}
+  var cached=S.built.pairs.size-S.todo.length,delay=+$("delay").value||0;
+  $("kRows").textContent=fmt(st.rows);$("kCons").textContent=fmt(st.considered);$("kPairs").textContent=fmt(S.built.pairs.size);
+  $("kCache").textContent=fmt(cached);$("kTodo").textContent=fmt(S.todo.length);$("kReq").textContent=fmt(S.batches.length);
+  $("kEta").textContent=provId()==="offline"?"segundos":"≈ "+dur(S.batches.length*(delay/1000+2));
+  $("kSkip").textContent=fmt(st.noCoord)+" / "+fmt(st.same);
+  log("Plano: "+fmt(S.built.pairs.size)+" pares únicos ("+fmt(st.considered)+" linhas), "+fmt(cached)+" já no cache, "+fmt(S.todo.length)+" a consultar em "+fmt(S.batches.length)+" requisições.","o");
+  if(st.considered===0)log("Nenhuma linha com o modal informado. Confira o valor do filtro de Modal.","w");
+  $("btnTest").disabled=$("btnRun").disabled=S.batches.length===0;
+  updateResults();
+});
+
+/* ---------- Execução ---------- */
+async function callBatch(b){
+  var p=provId(),P=CORE.PROV[p],c=cfg();
+  if(p==="offline")return P.parse(b,null,c);
+  if((p==="ors"||p==="azure")&&!c.key)throw CORE.apiErr("Informe a chave da API.");
+  var rq=P.req(b,c),wait=2000;
+  for(var attempt=1;attempt<=5;attempt++){
+    var resp=null,j=null;
+    try{
+      var ctl=new AbortController(),to=setTimeout(function(){ctl.abort();},90000);
+      rq.init.signal=ctl.signal;resp=await fetch(rq.url,rq.init);clearTimeout(to);
+      var txt=await resp.text();try{j=JSON.parse(txt);}catch(e){j={_raw:txt};}
+    }catch(e){
+      log("Falha de rede ("+(e.name==="AbortError"?"tempo esgotado":e.message)+"). Tentativa "+attempt+"/5.","w");
+      if(attempt===5)throw CORE.apiErr("Falha de rede: "+e.message+" – se persistir, a rede corporativa pode estar bloqueando o serviço.");
+      await sleep(wait);wait=Math.min(wait*2,60000);continue;
+    }
+    if(resp.status===429||resp.status>=500){
+      log("Serviço respondeu "+resp.status+(resp.status===429?" (limite de ritmo/cota)":"")+". Aguardando "+Math.round(wait/1000)+" s…","w");
+      if(attempt===5)throw CORE.apiErr("HTTP "+resp.status+" "+JSON.stringify(j).slice(0,200));
+      await sleep(wait);wait=Math.min(wait*2,60000);continue;
+    }
+    if(resp.status===401||resp.status===403)throw CORE.apiErr("Chave inválida ou sem permissão (HTTP "+resp.status+").");
+    if(resp.status===413)throw CORE.apiErr("Requisição grande demais",true);
+    if(!resp.ok&&!(j&&(j.error||j.code)))throw CORE.apiErr("HTTP "+resp.status+" "+(j._raw||JSON.stringify(j)).slice(0,200));
+    return P.parse(b,j,c);
+  }
+}
+async function store(b,res){
+  var ent=[],now=new Date().toISOString().slice(0,10),src=srcLabel();
+  res.forEach(function(x){
+    var o=b.origins[x.i],d=b.dests[x.k];if(!o||!d||o.k===d.k)return;
+    var v={km:x.km,h:x.h,snap:x.snap,st:x.km==null?"SEM_ROTA":"OK",src:src,t:now};
+    S.results.set(o.k+"|"+d.k,v);ent.push([o.k+"|"+d.k,v]);
+  });
+  await DB.putMany(cachePrefix(),ent);
+}
+function markErr(b,msg){var src=srcLabel();b.origins.forEach(function(o){b.dests.forEach(function(d){var k=o.k+"|"+d.k;if(!S.results.has(k)||S.results.get(k).st==="ERRO")S.results.set(k,{km:null,h:null,snap:null,st:"ERRO",src:src,msg:msg});});});}
+async function run(maxReq){
+  if(S.running)return;S.running=true;S.stop=false;
+  ["btnPlan","btnTest","btnRun","btnClear","prov","file"].forEach(function(b){$(b).disabled=true;});$("btnStop").disabled=false;
+  var q=S.batches.slice(),total=q.length,done=0,delay=+$("delay").value||0,errs=0;
+  log("Iniciando: "+fmt(Math.min(total,maxReq))+" requisição(ões) – "+srcLabel()+".");
+  while(q.length&&!S.stop&&done<maxReq){
+    var b=q.shift(),t0=performance.now();
+    try{var res=await callBatch(b);await store(b,res);errs=0;}
+    catch(e){
+      if(e.size){var sp=CORE.splitBatch(b);if(sp){q.unshift(sp[0],sp[1]);total++;log("Lote acima do limite do serviço – dividindo em dois.","w");continue;}}
+      markErr(b,e.message);log("Erro: "+e.message,"e");errs++;
+      if(/chave|key|permiss/i.test(e.message)||errs>=3){log("Execução interrompida. Corrija o problema e clique em \"Calcular tudo\" para continuar de onde parou.","e");done++;S.batches=q;break;}
+    }
+    done++;S.times.push((performance.now()-t0)/1000+delay/1000);if(S.times.length>20)S.times.shift();
+    var avg=S.times.reduce(function(a,c){return a+c;},0)/S.times.length;
+    $("bar").style.width=(100*done/total).toFixed(1)+"%";
+    $("prog").textContent=fmt(done)+" de "+fmt(total)+" requisições · restante ≈ "+dur(avg*q.length);
+    S.batches=q;
+    if(done%5===0||!q.length)updateResults();
+    if(q.length&&delay)await sleep(delay);
+  }
+  S.running=false;updateResults();
+  if(!q.length)log("Concluído. Baixe o Excel ou o CSV no passo 4.","o");else if(S.stop)log("Pausado. Restam "+fmt(q.length)+" requisições – clique em \"Calcular tudo\" para continuar.","w");
+  ["btnPlan","btnClear","prov","file"].forEach(function(b){$(b).disabled=false;});$("btnStop").disabled=true;
+  $("btnTest").disabled=$("btnRun").disabled=!S.batches.length;
+}
+$("btnTest").addEventListener("click",function(){run(1);});
+$("btnRun").addEventListener("click",function(){run(Infinity);});
+$("btnStop").addEventListener("click",function(){S.stop=true;log("Pausando após a requisição atual…","w");});
+$("btnClear").addEventListener("click",async function(){if(!confirm("Apagar todas as distâncias guardadas neste navegador?"))return;await DB.clear();S.results=new Map();log("Cache apagado.","w");resetPlan();});
+
+/* ---------- Resultados ---------- */
+function updateResults(){
+  if(!S.built)return;
+  var ok=0,no=0,er=0,ratios=[],susp=[];
+  S.built.pairs.forEach(function(p,pk){var r=S.results.get(pk);if(!r)return;
+    if(r.st==="OK"){ok++;if(p.hav>=30)ratios.push(r.km/p.hav);var f=CORE.flag(p,r);if(f)susp.push({p:p,r:r,f:f});}
+    else if(r.st==="SEM_ROTA"){no++;susp.push({p:p,r:r,f:"Serviço não encontrou rota"});}else er++;});
+  $("rOk").textContent=fmt(ok);$("rNo").textContent=fmt(no);$("rErr").textContent=fmt(er);
+  var med=CORE.quant(ratios,.5);$("rFac").textContent=med==null?"–":fmt(med,2);
+  $("rFacTxt").textContent=med==null?"":"Base: "+fmt(ratios.length)+" pares com linha reta ≥ 30 km. Faixa P10–P90: "+fmt(CORE.quant(ratios,.1),2)+" a "+fmt(CORE.quant(ratios,.9),2)+". Use para calibrar o fator 1,25 da planilha.";
+  /* exemplo de arco por par (para a tabela) */
+  var ex=new Map();if(susp.length){var m=S.map,rp=S.built.rowPair;for(var i=0;i<rp.length&&ex.size<susp.length;i++){var k=rp[i];if(k&&k[0]!=="#"&&!ex.has(k))ex.set(k,(S.aoa[i][m.orig]||"")+" → "+(S.aoa[i][m.dest]||""));}}
+  susp.sort(function(a,b){return (b.r.snap||0)-(a.r.snap||0);});
+  $("suspN").textContent=fmt(susp.length);
+  $("susp").querySelector("tbody").innerHTML=susp.slice(0,300).map(function(s){
+    return "<tr><td>"+(ex.get(s.p.pk)||s.p.pk)+"</td><td class='n'>"+fmt(s.p.hav,1)+"</td><td class='n'>"+fmt(s.r.km,1)+"</td><td class='n'>"+(s.r.km!=null&&s.p.hav?fmt(s.r.km/s.p.hav,2):"–")+"</td><td class='n'>"+fmt(s.r.snap)+"</td><td>"+s.f+"</td></tr>";}).join("");
+  var any=ok+no+er>0;$("btnCsv").disabled=!any;$("btnXlsx").disabled=!any||!window.XLSX;
+}
+function rowOut(i){
+  var k=S.built.rowPair[i];if(k==null)return null;
+  if(k==="#SEM_COORD")return [null,null,null,null,"SEM_COORDENADA",""];
+  if(k==="#MESMO_PONTO")return [0,0,null,null,"MESMO_PONTO",""];
+  var r=S.results.get(k),p=S.built.pairs.get(k);
+  if(!r)return [null,null,null,null,"PENDENTE",""];
+  return [r.km==null?null:Math.round(r.km*10)/10,r.h==null?null:Math.round(r.h*100)/100,r.km!=null&&p.hav>0?Math.round(r.km/p.hav*1000)/1000:null,r.snap==null?null:Math.round(r.snap),r.st,r.src+(r.t?" ("+r.t+")":"")];
+}
+function download(blob,name){var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},2000);}
+$("btnCsv").addEventListener("click",function(){
+  var m=S.map,L=["Chave-Lane-OD;Origem;Destino;Linha reta (km);"+NEWCOLS.join(";")];
+  var dec=function(v){return v==null?"":String(v).replace(".",",");};
+  for(var i=S.hr+1;i<S.aoa.length;i++){var o=rowOut(i);if(!o)continue;var row=S.aoa[i],p=S.built.pairs.get(S.built.rowPair[i]);
+    var key=m.key>=0?row[m.key]:(row[m.orig]+"|"+row[m.dest]+"|"+(m.modal>=0?row[m.modal]:""));
+    L.push([key,row[m.orig],row[m.dest],p?dec(Math.round(p.hav*10)/10):""].concat(o.map(dec)).map(function(x){x=x==null?"":String(x);return /[;"\n]/.test(x)?'"'+x.replace(/"/g,'""')+'"':x;}).join(";"));}
+  download(new Blob(["\uFEFF"+L.join("\r\n")],{type:"text/csv;charset=utf-8"}),(S.fileName||"Matriz_OD")+"_DistanciaAPI.csv");
+  log("CSV gerado ("+fmt(L.length-1)+" linhas).","o");
+});
+$("btnXlsx").addEventListener("click",function(){
+  try{
+    var wb=S.wb;if(S.isCsv||!wb){wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(S.aoa),"Matriz_OD");}
+    var name=S.isCsv?"Matriz_OD":$("sheet").value,ws=wb.Sheets[name],rg=XLSX.utils.decode_range(ws["!ref"]);
+    var hdrRow=S.hr+S.off.r,cols=[],next=rg.e.c,hdrMap={};
+    for(var hc=rg.s.c;hc<=rg.e.c;hc++){var hcell=ws[XLSX.utils.encode_cell({r:hdrRow,c:hc})];if(hcell&&hcell.v!=null)hdrMap[CORE.norm(hcell.v)]=hc;}
+    NEWCOLS.forEach(function(nm){var k=CORE.norm(nm);cols.push(k in hdrMap?hdrMap[k]:++next);});
+    cols.forEach(function(c,j){ws[XLSX.utils.encode_cell({r:hdrRow,c:c})]={t:"s",v:NEWCOLS[j]};});
+    var n=0;
+    for(var i=S.hr+1;i<S.aoa.length;i++){var o=rowOut(i),r=i+S.off.r;
+      cols.forEach(function(c,j){var a=XLSX.utils.encode_cell({r:r,c:c});var v=o?o[j]:null;
+        if(v==null||v===""){delete ws[a];}else ws[a]=typeof v==="number"?{t:"n",v:v}:{t:"s",v:v};});if(o)n++;}
+    rg.e.c=Math.max(rg.e.c,Math.max.apply(null,cols));ws["!ref"]=XLSX.utils.encode_range(rg);
+    if(ws["!autofilter"])ws["!autofilter"].ref=XLSX.utils.encode_range({s:{r:hdrRow,c:rg.s.c},e:{r:rg.e.r,c:rg.e.c}});
+    /* aba com pares únicos */
+    var U=[["Lat Origem","Lon Origem","Lat Destino","Lon Destino","Linha reta (km)"].concat(NEWCOLS)];
+    S.built.pairs.forEach(function(p,pk){var r=S.results.get(pk)||{};U.push([p.o[0],p.o[1],p.d[0],p.d[1],Math.round(p.hav*10)/10,
+      r.km==null?null:Math.round(r.km*10)/10,r.h==null?null:Math.round(r.h*100)/100,r.km!=null&&p.hav>0?Math.round(r.km/p.hav*1000)/1000:null,r.snap==null?null:Math.round(r.snap),r.st||"PENDENTE",(r.src||"")+(r.t?" ("+r.t+")":"")]);});
+    var wsU=XLSX.utils.aoa_to_sheet(U);wsU["!cols"]=[8,8,8,8,10,12,10,10,12,14,30].map(function(w){return {wch:w+2};});
+    var nm="Distancias_API";if(wb.SheetNames.indexOf(nm)>=0){wb.Sheets[nm]=wsU;}else XLSX.utils.book_append_sheet(wb,wsU,nm);
+    log("Gerando Excel… (pode levar alguns segundos)");
+    setTimeout(function(){
+      var out=XLSX.write(wb,{bookType:"xlsx",type:"array",compression:true});
+      download(new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),(S.fileName||"Matriz_OD")+"_DistanciaAPI.xlsx");
+      log("Excel gerado: "+fmt(n)+" linhas preenchidas na aba "+name+" + aba Distancias_API.","o");
+    },50);
+  }catch(e){log("Erro ao gerar Excel: "+e.message+" – use o botão CSV.","e");}
+});
+
+/* ---------- Início ---------- */
+document.addEventListener("xlsx-ready",function(){
+  if(window.XLSX){$("libStatus").textContent="Leitor de Excel pronto";$("libStatus").style.background="#E8F5E9";}
+  else{$("libStatus").textContent="Leitor de Excel bloqueado pela rede – use CSV";$("libStatus").style.background="#FFEBEE";}
+});
+DB.open();onProv();
+log("Pronto. 1) Carregue a Matriz OD  2) Escolha o serviço  3) Analisar base → Testar 1 requisição → Calcular tudo.");
+})();
+</script>
+</body>
+</html>
